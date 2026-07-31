@@ -1,0 +1,27 @@
+schema_version: 1
+id: product.keepawake
+name: keepawake
+surface: products
+kind: product
+status: shipped
+persona: Mac users and developers who need deliberate closed-lid work without losing power-state control.
+jtbd: Keep a Mac awake while the lid is closed, report the combined state honestly, and restore the prior sleep policy safely.
+pricing: Free and open source under MIT.
+launch: built
+license: MIT
+tags:
+  - go
+  - cli
+  - macos
+  - power-management
+  - oss
+checks:
+  - name: verify
+    command:
+      - make
+      - verify
+  - name: build
+    command:
+      - make
+      - build
+description: macOS-only Go CLI combining pmset disablesleep with a managed caffeinate process, verified PID identity, serialized lifecycle transitions, prior power-setting restoration, and fail-safe handling for legacy or malformed state.

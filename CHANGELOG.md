@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.2] - 2026-07-31
+
+- Add project-owned catalog and public portfolio metadata for the open-source repository.
+
 ## [0.1.1] - 2026-07-31
 
 - Preserve the pre-existing `SleepDisabled` setting instead of overwriting it on shutdown.

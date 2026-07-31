@@ -1,0 +1,8 @@
+schema_version: 1
+product_id: product.keepawake
+visibility: public
+reviewed: true
+assets: []
+case_study:
+    enabled: false
+    evidence: []
