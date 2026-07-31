@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -327,6 +328,78 @@ func TestParseSleepDisabled(t *testing.T) {
 				t.Fatalf("parse = %v, err=%v; want %v", got, err, test.want)
 			}
 		})
+	}
+}
+
+func TestDarwinSleepDisabledReadsPmsetOutput(t *testing.T) {
+	original := combinedOutput
+	t.Cleanup(func() { combinedOutput = original })
+	var gotName string
+	var gotArgs []string
+	combinedOutput = func(name string, args ...string) ([]byte, error) {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return []byte("SleepDisabled 1\n"), nil
+	}
+
+	got, err := (darwinPlatform{}).SleepDisabled()
+	if err != nil || !got {
+		t.Fatalf("SleepDisabled = %v, err=%v; want true", got, err)
+	}
+	if gotName != "/usr/bin/pmset" || strings.Join(gotArgs, " ") != "-g" {
+		t.Fatalf("pmset command = %s %v, want /usr/bin/pmset [-g]", gotName, gotArgs)
+	}
+}
+
+func TestDarwinSetSleepDisabledBuildsSudoCommand(t *testing.T) {
+	original := runCommand
+	t.Cleanup(func() { runCommand = original })
+	for _, test := range []struct {
+		name     string
+		disabled bool
+		value    string
+	}{
+		{name: "enable", disabled: true, value: "1"},
+		{name: "disable", disabled: false, value: "0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var got []string
+			runCommand = func(cmd *exec.Cmd) error {
+				got = append([]string(nil), cmd.Args...)
+				return nil
+			}
+			if err := (darwinPlatform{}).SetSleepDisabled(test.disabled); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"/usr/bin/sudo", "/usr/bin/pmset", "-a", "disablesleep", test.value}
+			if strings.Join(got, " ") != strings.Join(want, " ") {
+				t.Fatalf("command = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestNativeProcessHelpersFailSafeForInvalidOrUnownedProcess(t *testing.T) {
+	if _, err := (darwinPlatform{}).InspectProcess(1); !errors.Is(err, errProcessNotFound) {
+		t.Fatalf("InspectProcess invalid pid error = %v, want errProcessNotFound", err)
+	}
+	if err := (darwinPlatform{}).StopProcess(processInfo{PID: 1}); !errors.Is(err, errProcessNotFound) {
+		t.Fatalf("StopProcess invalid process error = %v, want errProcessNotFound", err)
+	}
+	if err := (darwinPlatform{}).ReleaseProcess(processInfo{}); err != nil {
+		t.Fatalf("ReleaseProcess without owned handle = %v, want nil", err)
+	}
+}
+
+func TestDefaultPIDPathHonorsOverride(t *testing.T) {
+	t.Setenv("KEEPAWAKE_PIDFILE", "/tmp/keepawake-review.pid")
+	if got := defaultPIDPath(); got != "/tmp/keepawake-review.pid" {
+		t.Fatalf("override pid path = %q", got)
+	}
+	t.Setenv("KEEPAWAKE_PIDFILE", "")
+	want := filepath.Join(os.TempDir(), "keepawake.caffeinate.pid")
+	if got := defaultPIDPath(); got != want {
+		t.Fatalf("default pid path = %q, want %q", got, want)
 	}
 }
 

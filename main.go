@@ -447,8 +447,16 @@ func boolInt(value bool) int {
 
 type darwinPlatform struct{}
 
+var combinedOutput = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
+
+var runCommand = func(cmd *exec.Cmd) error {
+	return cmd.Run()
+}
+
 func (darwinPlatform) SleepDisabled() (bool, error) {
-	output, err := exec.Command("/usr/bin/pmset", "-g").CombinedOutput()
+	output, err := combinedOutput("/usr/bin/pmset", "-g")
 	if err != nil {
 		return false, fmt.Errorf("pmset -g: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -484,7 +492,7 @@ func (darwinPlatform) SetSleepDisabled(disabled bool) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return runCommand(cmd)
 }
 
 func (p darwinPlatform) StartCaffeinate() (processInfo, error) {
@@ -537,7 +545,7 @@ func (darwinPlatform) InspectProcess(pid int) (processInfo, error) {
 }
 
 func psField(pid int, field string) (string, error) {
-	output, err := exec.Command("/bin/ps", "-ww", "-p", strconv.Itoa(pid), "-o", field+"=").CombinedOutput()
+	output, err := combinedOutput("/bin/ps", "-ww", "-p", strconv.Itoa(pid), "-o", field+"=")
 	if err != nil || strings.TrimSpace(string(output)) == "" {
 		return "", errProcessNotFound
 	}

@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.3] - 2026-07-31
+
+- Add non-mutating coverage for native `pmset`, process-safety, and PID-path command paths.
+
 ## [0.1.2] - 2026-07-31
 
 - Add project-owned catalog and public portfolio metadata for the open-source repository.
