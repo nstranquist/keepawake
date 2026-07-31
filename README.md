@@ -37,9 +37,12 @@ With no verb, `keepawake` defaults to `on`. `start` and `stop` are accepted as a
 ## Safety model
 
 - The utility manages both `pmset -a disablesleep 1` and a persistent `/usr/bin/caffeinate -i` process.
+- When it starts, it records the prior `SleepDisabled` setting and restores that setting on `off` instead of assuming the prior state was enabled.
 - Its PID record stores the process start identity as well as the PID. `off` refuses to signal a reused or unrelated process.
 - Commands are serialized with a lock, and failed transitions attempt to roll back the state they introduced.
 - Set `KEEPAWAKE_PIDFILE` to override the default temporary PID-record path, which is useful for isolated tests.
+
+Records created by older versions do not contain the prior power-setting state. In that case, `off` and `repair` fail safe: they do not guess or overwrite `SleepDisabled`, and may report `PARTIAL` until you decide whether the setting should be restored manually.
 
 Always run `keepawake off` when finished. A disabled sleep setting is persistent, and a closed laptop has less effective airflow.
 

@@ -10,3 +10,7 @@ Before opening a pull request:
 4. Include tests for lifecycle and process-identity changes.
 
 This project is macOS-specific. Changes that touch `pmset`, `caffeinate`, PID handling, locking, or rollback should explain the failure mode they protect against.
+
+This repository is the canonical public source. The copy used for local
+dogfooding elsewhere should remain in parity with this tree after behavioral
+changes.

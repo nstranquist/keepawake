@@ -19,10 +19,11 @@ const pidRecordVersion = 1
 var errProcessNotFound = errors.New("process not found")
 
 type pidRecord struct {
-	Version int    `json:"version"`
-	PID     int    `json:"pid"`
-	Started string `json:"started,omitempty"`
-	Command string `json:"command,omitempty"`
+	Version             int    `json:"version"`
+	PID                 int    `json:"pid"`
+	Started             string `json:"started,omitempty"`
+	Command             string `json:"command,omitempty"`
+	SleepDisabledBefore *bool  `json:"sleep_disabled_before,omitempty"`
 }
 
 type processInfo struct {
@@ -72,13 +73,29 @@ func (s pidStore) load() (pidRecord, bool, error) {
 	return record, true, nil
 }
 
-func (s pidStore) save(info processInfo) error {
-	record := pidRecord{
-		Version: pidRecordVersion,
-		PID:     info.PID,
-		Started: info.Started,
-		Command: info.Command,
+func managedRecord(info processInfo, sleepDisabledBefore *bool) pidRecord {
+	return pidRecord{
+		Version:             pidRecordVersion,
+		PID:                 info.PID,
+		Started:             info.Started,
+		Command:             info.Command,
+		SleepDisabledBefore: sleepDisabledBefore,
 	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func (s pidStore) save(info processInfo) error {
+	return s.saveRecord(managedRecord(info, nil))
+}
+
+func (s pidStore) saveManaged(info processInfo, sleepDisabledBefore bool) error {
+	return s.saveRecord(managedRecord(info, boolPtr(sleepDisabledBefore)))
+}
+
+func (s pidStore) saveRecord(record pidRecord) error {
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -134,10 +151,11 @@ func (s pidStore) tryLock() (func(), error) {
 }
 
 type state struct {
-	sleepDisabled bool
-	pidFile       bool
-	process       *processInfo
-	stale         bool
+	sleepDisabled       bool
+	sleepDisabledBefore *bool
+	pidFile             bool
+	process             *processInfo
+	stale               bool
 }
 
 type application struct {
@@ -161,6 +179,7 @@ func (a application) inspect() (state, error) {
 	if !exists {
 		return result, nil
 	}
+	result.sleepDisabledBefore = record.SleepDisabledBefore
 	info, err := a.platform.InspectProcess(record.PID)
 	if err != nil || !isCaffeinate(info.Command) {
 		result.stale = true
@@ -221,6 +240,10 @@ func (a application) on() int {
 	if err != nil {
 		return a.fail(err)
 	}
+	sleepDisabledBefore := current.sleepDisabledBefore
+	if sleepDisabledBefore == nil && !current.sleepDisabled {
+		sleepDisabledBefore = boolPtr(false)
+	}
 	enabledByCommand := !current.sleepDisabled
 	if enabledByCommand {
 		if err := a.platform.SetSleepDisabled(true); err != nil {
@@ -228,7 +251,7 @@ func (a application) on() int {
 		}
 	}
 	if current.process != nil {
-		if err := a.store.save(*current.process); err != nil {
+		if err := a.store.saveRecord(managedRecord(*current.process, sleepDisabledBefore)); err != nil {
 			return a.fail(a.rollbackError(fmt.Errorf("failed to persist process identity: %w", err), enabledByCommand, nil))
 		}
 		fmt.Fprintf(a.stdout, "keepawake: ON — already running (caffeinate pid %d)\n", current.process.PID)
@@ -244,7 +267,7 @@ func (a application) on() int {
 	if err != nil {
 		return a.fail(a.rollbackError(fmt.Errorf("failed to start caffeinate: %w", err), enabledByCommand, nil))
 	}
-	if err := a.store.save(info); err != nil {
+	if err := a.store.saveRecord(managedRecord(info, boolPtr(current.sleepDisabled))); err != nil {
 		return a.fail(a.rollbackError(fmt.Errorf("failed to persist process identity: %w", err), enabledByCommand, &info))
 	}
 	if err := a.platform.ReleaseProcess(info); err != nil {
@@ -256,15 +279,27 @@ func (a application) on() int {
 	return 0
 }
 
+func (a application) restoreSleepSetting(current state) (bool, error) {
+	if current.sleepDisabledBefore == nil {
+		return current.sleepDisabled, nil
+	}
+	if current.sleepDisabled == *current.sleepDisabledBefore {
+		return false, nil
+	}
+	if err := a.platform.SetSleepDisabled(*current.sleepDisabledBefore); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 func (a application) off() int {
 	current, err := a.inspect()
 	if err != nil {
 		return a.fail(err)
 	}
-	if current.sleepDisabled {
-		if err := a.platform.SetSleepDisabled(false); err != nil {
-			return a.fail(fmt.Errorf("failed to restore lid-close sleep: %w", err))
-		}
+	sleepStateUnknown, err := a.restoreSleepSetting(current)
+	if err != nil {
+		return a.fail(fmt.Errorf("failed to restore lid-close sleep: %w", err))
 	}
 	if current.process != nil {
 		if err := a.platform.StopProcess(*current.process); err != nil && !errors.Is(err, errProcessNotFound) {
@@ -275,6 +310,14 @@ func (a application) off() int {
 		if err := a.store.remove(); err != nil {
 			return a.fail(fmt.Errorf("failed to remove pid record: %w", err))
 		}
+	}
+	if sleepStateUnknown {
+		fmt.Fprintln(a.stdout, "keepawake: PARTIAL — SleepDisabled remains enabled because its previous ownership is unknown; run 'sudo pmset -a disablesleep 0' only if you want normal lid-close sleep.")
+		return 1
+	}
+	if current.sleepDisabledBefore != nil && *current.sleepDisabledBefore {
+		fmt.Fprintln(a.stdout, "keepawake: OFF — managed caffeinate stopped; pre-existing lid-close sleep disable preserved.")
+		return 0
 	}
 	fmt.Fprintln(a.stdout, "keepawake: OFF — normal lid-close sleep restored.")
 	return 0
@@ -311,6 +354,10 @@ func (a application) repair() int {
 	// Any live component means the last intended state was most likely ON.
 	// Otherwise repair only removes stale metadata and preserves OFF.
 	if current.sleepDisabled || current.process != nil {
+		sleepDisabledBefore := current.sleepDisabledBefore
+		if sleepDisabledBefore == nil && !current.sleepDisabled {
+			sleepDisabledBefore = boolPtr(false)
+		}
 		enabledByCommand := !current.sleepDisabled
 		if enabledByCommand {
 			if err := a.platform.SetSleepDisabled(true); err != nil {
@@ -327,7 +374,7 @@ func (a application) repair() int {
 			info = &started
 			startedByCommand = true
 		}
-		if err := a.store.save(*info); err != nil {
+		if err := a.store.saveRecord(managedRecord(*info, sleepDisabledBefore)); err != nil {
 			var started *processInfo
 			if startedByCommand {
 				started = info
@@ -344,8 +391,20 @@ func (a application) repair() int {
 		return 0
 	}
 	if current.pidFile {
+		sleepStateUnknown, err := a.restoreSleepSetting(current)
+		if err != nil {
+			return a.fail(fmt.Errorf("failed to restore lid-close sleep: %w", err))
+		}
 		if err := a.store.remove(); err != nil {
 			return a.fail(fmt.Errorf("failed to remove stale pid record: %w", err))
+		}
+		if sleepStateUnknown {
+			fmt.Fprintln(a.stdout, "keepawake: PARTIAL — stale metadata removed; SleepDisabled remains enabled because its previous ownership is unknown")
+			return 1
+		}
+		if current.sleepDisabledBefore != nil && *current.sleepDisabledBefore {
+			fmt.Fprintln(a.stdout, "keepawake: OFF — stale metadata removed; pre-existing lid-close sleep disable preserved")
+			return 0
 		}
 	}
 	fmt.Fprintln(a.stdout, "keepawake: OFF — stale metadata removed; normal lid-close sleep is enabled")
@@ -389,13 +448,27 @@ func (darwinPlatform) SleepDisabled() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("pmset -g: %w: %s", err, strings.TrimSpace(string(output)))
 	}
+	return parseSleepDisabled(string(output))
+}
+
+func parseSleepDisabled(output string) (bool, error) {
 	for _, line := range strings.Split(string(output), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && strings.EqualFold(fields[0], "SleepDisabled") {
-			return fields[1] == "1", nil
+		if len(fields) > 0 && strings.EqualFold(fields[0], "SleepDisabled") {
+			if len(fields) < 2 {
+				return false, errors.New("pmset -g output has an incomplete SleepDisabled value")
+			}
+			switch fields[1] {
+			case "0":
+				return false, nil
+			case "1":
+				return true, nil
+			default:
+				return false, fmt.Errorf("pmset -g output has invalid SleepDisabled value %q", fields[1])
+			}
 		}
 	}
-	return false, nil
+	return false, errors.New("pmset -g output did not contain SleepDisabled")
 }
 
 func (darwinPlatform) SetSleepDisabled(disabled bool) error {

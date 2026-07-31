@@ -130,6 +130,9 @@ func TestOnPersistsAndReleasesNewManagedProcess(t *testing.T) {
 	if err != nil || !exists || record.PID != 77 || record.Started != "start-77" {
 		t.Fatalf("record = %#v, exists=%v, err=%v", record, exists, err)
 	}
+	if record.SleepDisabledBefore == nil || *record.SleepDisabledBefore {
+		t.Fatalf("sleep baseline = %#v, want false", record.SleepDisabledBefore)
+	}
 }
 
 func TestOffStopsVerifiedProcessBeforeRemovingRecord(t *testing.T) {
@@ -140,7 +143,7 @@ func TestOffStopsVerifiedProcessBeforeRemovingRecord(t *testing.T) {
 		inspectErrs: map[int]error{},
 	}
 	app, _, _, store := newTestApp(t, platform)
-	if err := store.save(info); err != nil {
+	if err := store.saveManaged(info, false); err != nil {
 		t.Fatal(err)
 	}
 	if code := app.runUnlocked([]string{"off"}); code != 0 {
@@ -148,6 +151,9 @@ func TestOffStopsVerifiedProcessBeforeRemovingRecord(t *testing.T) {
 	}
 	if len(platform.stopCalls) != 1 || platform.stopCalls[0] != 42 {
 		t.Fatalf("stop calls = %v, want [42]", platform.stopCalls)
+	}
+	if len(platform.setCalls) != 1 || platform.setCalls[0] {
+		t.Fatalf("set calls = %v, want [false]", platform.setCalls)
 	}
 	if _, err := os.Stat(store.path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("record remains after verified stop: %v", err)
@@ -159,21 +165,54 @@ func TestOffNeverSignalsProcessFromStaleRecord(t *testing.T) {
 		// Even another caffeinate process is not ours when its start identity differs.
 		42: {PID: 42, Started: "different-start", Command: "/usr/bin/caffeinate -i"},
 	}, inspectErrs: map[int]error{}}
-	app, _, _, store := newTestApp(t, platform)
+	app, out, _, store := newTestApp(t, platform)
 	if err := store.save(processInfo{PID: 42, Started: "old-start", Command: "/usr/bin/caffeinate -i"}); err != nil {
 		t.Fatal(err)
 	}
-	if code := app.run([]string{"off"}); code != 0 {
-		t.Fatalf("off code = %d", code)
+	if code := app.run([]string{"off"}); code != 1 {
+		t.Fatalf("off code = %d, want 1; output=%q", code, out.String())
 	}
 	if len(platform.stopCalls) != 0 {
 		t.Fatalf("stale process was signaled: %v", platform.stopCalls)
 	}
-	if platform.sleep {
-		t.Fatal("sleep remained disabled")
+	if !platform.sleep {
+		t.Fatal("unknown sleep ownership was changed")
+	}
+	if !strings.Contains(out.String(), "previous ownership is unknown") {
+		t.Fatalf("missing unknown ownership warning: %q", out.String())
 	}
 	if _, err := os.Stat(store.path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stale record remains: %v", err)
+	}
+}
+
+func TestOnAndOffPreservePreexistingSleepSetting(t *testing.T) {
+	info := processInfo{PID: 77, Started: "start-77", Command: "/usr/bin/caffeinate -i"}
+	platform := &fakePlatform{
+		sleep:       true,
+		processes:   map[int]processInfo{},
+		inspectErrs: map[int]error{},
+		started:     info,
+	}
+	app, out, _, store := newTestApp(t, platform)
+	if code := app.runUnlocked([]string{"on"}); code != 0 {
+		t.Fatalf("on code = %d; output=%q", code, out.String())
+	}
+	record, exists, err := store.load()
+	if err != nil || !exists || record.SleepDisabledBefore == nil || !*record.SleepDisabledBefore {
+		t.Fatalf("record = %#v, exists=%v, err=%v; want true baseline", record, exists, err)
+	}
+	if code := app.runUnlocked([]string{"off"}); code != 0 {
+		t.Fatalf("off code = %d; output=%q", code, out.String())
+	}
+	if len(platform.setCalls) != 0 {
+		t.Fatalf("set calls = %v, want no power-setting mutation", platform.setCalls)
+	}
+	if !platform.sleep {
+		t.Fatal("pre-existing sleep setting was changed")
+	}
+	if !strings.Contains(out.String(), "pre-existing lid-close sleep disable preserved") {
+		t.Fatalf("missing preservation output: %q", out.String())
 	}
 }
 
@@ -221,6 +260,9 @@ func TestRepairMigratesVerifiedLegacyRecord(t *testing.T) {
 	if err != nil || !exists || record.Started != "start-42" {
 		t.Fatalf("migrated record = %#v, exists=%v, err=%v", record, exists, err)
 	}
+	if record.SleepDisabledBefore == nil || *record.SleepDisabledBefore {
+		t.Fatalf("migrated sleep baseline = %#v, want false", record.SleepDisabledBefore)
+	}
 }
 
 func TestUnknownCommandReturnsUsage(t *testing.T) {
@@ -231,6 +273,34 @@ func TestUnknownCommandReturnsUsage(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "on|off|status|repair") {
 		t.Fatalf("usage missing commands: %q", errOut.String())
+	}
+}
+
+func TestParseSleepDisabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		output  string
+		want    bool
+		wantErr bool
+	}{
+		{name: "enabled", output: "SleepDisabled 1\n", want: true},
+		{name: "disabled case insensitive", output: "sleepdisabled 0\n", want: false},
+		{name: "missing", output: "System-wide power settings:\n", wantErr: true},
+		{name: "invalid", output: "SleepDisabled maybe\n", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseSleepDisabled(test.output)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("parse error = nil, want error")
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("parse = %v, err=%v; want %v", got, err, test.want)
+			}
+		})
 	}
 }
 
