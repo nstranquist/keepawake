@@ -193,6 +193,16 @@ func (a application) inspect() (state, error) {
 	return result, nil
 }
 
+func sessionSleepBaseline(current state) *bool {
+	if current.sleepDisabledBefore != nil {
+		return current.sleepDisabledBefore
+	}
+	if !current.sleepDisabled || !current.pidFile {
+		return boolPtr(current.sleepDisabled)
+	}
+	return nil
+}
+
 func isCaffeinate(command string) bool {
 	fields := strings.Fields(command)
 	return len(fields) > 0 && filepath.Base(fields[0]) == "caffeinate"
@@ -240,10 +250,7 @@ func (a application) on() int {
 	if err != nil {
 		return a.fail(err)
 	}
-	sleepDisabledBefore := current.sleepDisabledBefore
-	if sleepDisabledBefore == nil && !current.sleepDisabled {
-		sleepDisabledBefore = boolPtr(false)
-	}
+	sleepDisabledBefore := sessionSleepBaseline(current)
 	enabledByCommand := !current.sleepDisabled
 	if enabledByCommand {
 		if err := a.platform.SetSleepDisabled(true); err != nil {
@@ -267,7 +274,7 @@ func (a application) on() int {
 	if err != nil {
 		return a.fail(a.rollbackError(fmt.Errorf("failed to start caffeinate: %w", err), enabledByCommand, nil))
 	}
-	if err := a.store.saveRecord(managedRecord(info, boolPtr(current.sleepDisabled))); err != nil {
+	if err := a.store.saveRecord(managedRecord(info, sleepDisabledBefore)); err != nil {
 		return a.fail(a.rollbackError(fmt.Errorf("failed to persist process identity: %w", err), enabledByCommand, &info))
 	}
 	if err := a.platform.ReleaseProcess(info); err != nil {
@@ -354,10 +361,7 @@ func (a application) repair() int {
 	// Any live component means the last intended state was most likely ON.
 	// Otherwise repair only removes stale metadata and preserves OFF.
 	if current.sleepDisabled || current.process != nil {
-		sleepDisabledBefore := current.sleepDisabledBefore
-		if sleepDisabledBefore == nil && !current.sleepDisabled {
-			sleepDisabledBefore = boolPtr(false)
-		}
+		sleepDisabledBefore := sessionSleepBaseline(current)
 		enabledByCommand := !current.sleepDisabled
 		if enabledByCommand {
 			if err := a.platform.SetSleepDisabled(true); err != nil {

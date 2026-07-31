@@ -216,6 +216,32 @@ func TestOnAndOffPreservePreexistingSleepSetting(t *testing.T) {
 	}
 }
 
+func TestOnPreservesKnownSleepBaselineAfterStaleProcess(t *testing.T) {
+	info := processInfo{PID: 77, Started: "start-77", Command: "/usr/bin/caffeinate -i"}
+	platform := &fakePlatform{
+		sleep:       true,
+		processes:   map[int]processInfo{},
+		inspectErrs: map[int]error{},
+		started:     info,
+	}
+	app, _, _, store := newTestApp(t, platform)
+	if err := store.saveManaged(info, false); err != nil {
+		t.Fatal(err)
+	}
+	if code := app.runUnlocked([]string{"on"}); code != 0 {
+		t.Fatalf("on code = %d", code)
+	}
+	if code := app.runUnlocked([]string{"off"}); code != 0 {
+		t.Fatalf("off code = %d", code)
+	}
+	if len(platform.setCalls) != 1 || platform.setCalls[0] {
+		t.Fatalf("set calls = %v, want [false]", platform.setCalls)
+	}
+	if platform.sleep {
+		t.Fatal("known sleep baseline was not restored")
+	}
+}
+
 func TestRepairCompletesOnWhenEitherComponentIsLive(t *testing.T) {
 	newInfo := processInfo{PID: 77, Started: "start-77", Command: "/usr/bin/caffeinate -i"}
 	platform := &fakePlatform{
