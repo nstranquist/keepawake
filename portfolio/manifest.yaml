@@ -2,7 +2,11 @@ schema_version: 1
 product_id: product.keepawake
 visibility: public
 reviewed: true
-assets: []
+assets:
+    - path: portfolio/assets/status.png
+      kind: screenshot
+      alt: keepawake status reporting lid-close sleep disabled
+      caption: A real keepawake status result with lid-close sleep disabled.
 case_study:
     enabled: false
     evidence: []
