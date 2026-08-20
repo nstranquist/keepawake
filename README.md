@@ -4,6 +4,12 @@
 
 This repository is the standalone public distribution of the utility.
 
+## Showcase
+
+![keepawake status reporting lid-close sleep disabled](portfolio/assets/status.png)
+
+A real `keepawake status` result from a machine with the helper on.
+
 ## Requirements
 
 - macOS
