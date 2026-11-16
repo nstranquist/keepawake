@@ -480,6 +480,11 @@ func parseSleepDisabled(output string) (bool, error) {
 			}
 		}
 	}
+	// macOS omits SleepDisabled from a well-formed report until disablesleep
+	// has been set at least once, which means sleep is not disabled.
+	if strings.Contains(output, "System-wide power settings:") {
+		return false, nil
+	}
 	return false, errors.New("pmset -g output did not contain SleepDisabled")
 }
 
