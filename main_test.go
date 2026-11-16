@@ -312,7 +312,9 @@ func TestParseSleepDisabled(t *testing.T) {
 	}{
 		{name: "enabled", output: "SleepDisabled 1\n", want: true},
 		{name: "disabled case insensitive", output: "sleepdisabled 0\n", want: false},
-		{name: "missing", output: "System-wide power settings:\n", wantErr: true},
+		{name: "absent on fresh system", output: "System-wide power settings:\nCurrently in use:\n sleep 1\n", want: false},
+		{name: "missing", output: "unexpected output\n", wantErr: true},
+		{name: "empty", output: "", wantErr: true},
 		{name: "invalid", output: "SleepDisabled maybe\n", wantErr: true},
 	}
 	for _, test := range tests {
