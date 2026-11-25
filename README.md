@@ -30,25 +30,25 @@ The installer places the binary at `~/.local/bin/keepawake`. Add that directory 
 ## Usage
 
 ```sh
-keepawake on       # enable closed-lid awake behavior
+keepawake          # inspect the combined system and process state (default: status)
 keepawake status   # inspect the combined system and process state
+keepawake on       # enable closed-lid awake behavior
 keepawake repair   # reconcile a partial state toward ON
-keepawake off      # restore normal lid-close sleep
+keepawake off      # restore normal lid-close sleep and stop caffeinate
 ```
 
-With no verb, `keepawake` defaults to `on`. `start` and `stop` are accepted as aliases for `on` and `off`.
+With no verb, `keepawake` defaults to `status` (read-only). `start` and `stop` are accepted as aliases for `on` and `off`.
 
 `status` is read-only and reports `ON`, `OFF`, or `PARTIAL`. The `on`, `off`, and some `repair` paths invoke `sudo pmset`, so macOS may ask for administrator approval.
 
 ## Safety model
 
-- The utility manages both `pmset -a disablesleep 1` and a persistent `/usr/bin/caffeinate -i` process.
-- When it starts, it records the prior `SleepDisabled` setting and restores that setting on `off` instead of assuming the prior state was enabled.
+- The utility manages both `pmset -a disablesleep 1` and a persistent, session-detached `/usr/bin/caffeinate -i` process.
+- `keepawake off` is authoritative: it resets `pmset -a disablesleep 0`, verifies the change took effect, stops any verified managed `caffeinate`, and clears stale metadata so `keepawake status` returns `OFF`.
+- Its PID record lives under `~/.local/state/keepawake/caffeinate.pid` (or `$XDG_STATE_HOME/keepawake/caffeinate.pid`) so it stays consistent across shells and temp cleanups, while still reading and cleaning up legacy temp-dir records on upgrade.
 - Its PID record stores the process start identity as well as the PID. `off` refuses to signal a reused or unrelated process.
 - Commands are serialized with a lock, and failed transitions attempt to roll back the state they introduced.
-- Set `KEEPAWAKE_PIDFILE` to override the default temporary PID-record path, which is useful for isolated tests.
-
-Records created by older versions do not contain the prior power-setting state. In that case, `off` and `repair` fail safe: they do not guess or overwrite `SleepDisabled`, and may report `PARTIAL` until you decide whether the setting should be restored manually.
+- Set `KEEPAWAKE_PIDFILE` to override the PID-record path, which is useful for isolated tests.
 
 Always run `keepawake off` when finished. A disabled sleep setting is persistent, and a closed laptop has less effective airflow.
 
