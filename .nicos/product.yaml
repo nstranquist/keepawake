@@ -5,7 +5,7 @@ surface: products
 kind: product
 status: shipped
 persona: Mac users and developers who need deliberate closed-lid work without losing power-state control.
-jtbd: Keep a Mac awake while the lid is closed, report the combined state honestly, and restore the prior sleep policy safely.
+jtbd: Keep a Mac awake while the lid is closed, report the combined state honestly, and reliably restore normal lid-close sleep on off.
 pricing: Free and open source under MIT.
 launch: built
 license: MIT
@@ -24,4 +24,4 @@ checks:
     command:
       - make
       - build
-description: macOS-only Go CLI combining pmset disablesleep with a managed caffeinate process, verified PID identity, serialized lifecycle transitions, prior power-setting restoration, and fail-safe handling for legacy or malformed state.
+description: macOS-only Go CLI combining pmset disablesleep with a session-detached caffeinate process, read-only status default, verified PID identity, serialized lifecycle transitions, persistent state, and authoritative off restoration.
